@@ -1,3 +1,4 @@
+cat > /mnt/user-data/outputs/index.html << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -20,12 +21,18 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 button{transition:opacity .2s,transform .2s;font-family:inherit}
 button:hover{opacity:.85;transform:translateY(-1px)}
 tr:hover td{background:#F0EAE0!important}
+.saved-toast{position:fixed;bottom:24px;right:24px;background:#5C7A60;color:#fff;
+padding:10px 20px;border-radius:12px;font-size:13px;font-weight:600;
+opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999}
+.saved-toast.show{opacity:1}
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div class="saved-toast" id="toast">✓ Sauvegardé</div>
+
 <script type="text/babel">
-const {useState,useMemo,useRef}=React;
+const {useState,useMemo,useRef,useEffect}=React;
 
 /* ─── Couleurs ─────────────────────────────────────── */
 const sage='#7A9E7E',sageDk='#5C7A60',sageLt='#A8C5AC',sagePale='#D6E8D8';
@@ -41,7 +48,33 @@ const pct=(a,b)=>b>0?Math.min(100,Math.round(a/b*100)):0;
 const uid=()=>Math.random().toString(36).slice(2,9);
 const today=()=>new Date().toISOString().split('T')[0];
 
-/* ─── Données ──────────────────────────────────────── */
+/* ─── LocalStorage helpers ─────────────────────────── */
+function load(key,fallback){
+try{const v=localStorage.getItem('budget_'+key);return v?JSON.parse(v):fallback;}
+catch{return fallback;}
+}
+function save(key,val){
+try{localStorage.setItem('budget_'+key,JSON.stringify(val));}catch{}
+}
+function showToast(){
+const t=document.getElementById('toast');
+t.classList.add('show');
+setTimeout(()=>t.classList.remove('show'),1800);
+}
+
+/* Hook : useState persistant */
+function useSaved(key,fallback){
+const [val,setVal]=useState(()=>load(key,fallback));
+const set=v=>{
+const next=typeof v==='function'?v(val):v;
+setVal(next);
+save(key,next);
+showToast();
+};
+return[val,set];
+}
+
+/* ─── Catégories ───────────────────────────────────── */
 const CAT_REV=['Salaire','Prime','Cadeau','Vente','Autre'];
 const CAT_FIX=['Loyer','Électricité','Eau','Internet','Téléphone','Assurance','Transport','Abonnements'];
 const CAT_VAR=['Courses alimentaires','Restaurant','Loisirs','Vêtements','Beauté','Santé','Sport','Cadeaux','Animaux','Voyage','Divers'];
@@ -56,8 +89,6 @@ const TABS=[
 ];
 
 /* ─── Atomes UI ────────────────────────────────────── */
-const Card=({ch,st={}})=><div className="card" style={st}>{ch}</div>;
-
 const Pill=({color,children})=><span style={{
 background:color+'22',color,border:`1px solid ${color}44`,
 borderRadius:20,padding:'2px 10px',fontSize:11,fontWeight:600,whiteSpace:'nowrap'
@@ -71,18 +102,6 @@ borderRadius:99,transition:'width .6s'}}/>
 </div>
 );
 
-/* INPUT UNCONTROLLED — évite le blocage */
-const Inp=({defaultValue='',onBlurSave,type='text',placeholder,style={}})=>{
-const ref=useRef(null);
-return <input ref={ref} type={type} defaultValue={defaultValue} placeholder={placeholder}
-onBlur={e=>onBlurSave&&onBlurSave(e.target.value)}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%',...style}}
-onFocus={e=>e.target.style.borderColor=sage}
-onBlurCapture={e=>e.target.style.borderColor=beige2}/>;
-};
-
-/* SELECT */
 const Sel=({value,onChange,opts})=>(
 <select value={value} onChange={e=>onChange(e.target.value)}
 style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
@@ -91,7 +110,6 @@ padding:'7px 12px',fontSize:13,color:txt,outline:'none',cursor:'pointer',width:'
 </select>
 );
 
-/* BOUTON */
 const Btn=({onClick,children,v='pri',sm=false,st={}})=>{
 const vars={
 pri:{background:sage,color:'#fff',border:'none'},
@@ -101,6 +119,9 @@ danger:{background:err+'22',color:err,border:`1px solid ${err}44`},
 return <button onClick={onClick} style={{borderRadius:10,cursor:'pointer',fontWeight:600,
 padding:sm?'5px 12px':'8px 18px',fontSize:sm?12:13,...vars[v],...st}}>{children}</button>;
 };
+
+const inpStyle={background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
+padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'};
 
 /* ─── Camembert SVG ────────────────────────────────── */
 function Pie({data,size=160}){
@@ -113,7 +134,7 @@ const sl=data.map((d,i)=>{
 const sw=d.v/tot*2*Math.PI,x1=cx+r*Math.cos(ang),y1=cy+r*Math.sin(ang);
 ang+=sw;
 const x2=cx+r*Math.cos(ang),y2=cy+r*Math.sin(ang),lg=sw>Math.PI?1:0;
-return{p:`M${cx},${cy} L${x1},${y1} A${r},${r},0,${lg},1,${x2},${y2} Z`,c:PIE[i%PIE.length],lb:d.lb};
+return{p:`M${cx},${cy} L${x1},${y1} A${r},${r},0,${lg},1,${x2},${y2} Z`,c:PIE[i%PIE.length]};
 });
 return <svg width={size} height={size}>
 {sl.map((s,i)=><path key={i} d={s.p} fill={s.c} stroke={white} strokeWidth={2}/>)}
@@ -143,11 +164,11 @@ title={`Dépenses: ${eur(d.dep)}`}/>}
 </div>;
 }
 
-/* ─── Tableau générique avec formulaire d'ajout ─────── */
+/* ─── Tableau générique ────────────────────────────── */
 function Table({rows,onAdd,onDel,cols,lbAdd,catOpts}){
-/* Formulaire en état local — chaque champ est libre */
 const [cat,setCat]=useState(catOpts[0]);
-const [status,setStatus]=useState(cols.find(c=>c.k==='status')?.opts?.[0]||'');
+const statusOpts=cols.find(c=>c.k==='status')?.opts||[];
+const [status,setStatus]=useState(statusOpts[0]||'');
 const refs=useRef({});
 
 const handleAdd=()=>{
@@ -163,64 +184,50 @@ row[c.k]=c.type==='number'?Number(v):v;
 if(cols.filter(c=>c.req).some(c=>!row[c.k]))return;
 onAdd(row);
 cols.forEach(c=>{
-if(c.k!=='category'&&c.k!=='status'&&refs.current[c.k]){
-refs.current[c.k].value = c.k==='date'?today():'';
-}
+if(c.k!=='category'&&c.k!=='status'&&refs.current[c.k])
+refs.current[c.k].value=c.k==='date'?today():'';
 });
 };
 
 return <div>
 <div style={{overflowX:'auto'}}>
 <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-<thead>
-<tr style={{background:beige}}>
+<thead><tr style={{background:beige}}>
 {cols.map(c=><th key={c.k} style={{padding:'10px 14px',textAlign:'left',
 fontWeight:600,color:txtM,fontSize:12,whiteSpace:'nowrap'}}>{c.lb}</th>)}
 <th style={{width:48}}/>
-</tr>
-</thead>
+</tr></thead>
 <tbody>
 {rows.length===0&&<tr><td colSpan={cols.length+1}
-style={{padding:24,textAlign:'center',color:txtL,fontSize:13}}>Aucune entrée</td></tr>}
+style={{padding:24,textAlign:'center',color:txtL,fontSize:13}}>Aucune entrée — ajoutez-en une ci-dessous</td></tr>}
 {rows.map((row,i)=>(
 <tr key={row.id} style={{background:i%2===0?white:cream}}>
 {cols.map(c=>(
 <td key={c.k} style={{padding:'9px 14px',color:txt}}>
 {c.k==='category'?<Pill color={sage}>{row[c.k]}</Pill>
-:c.k==='amount'?<b style={{color:sageDk}}>{eur(row[c.k])}</b>
+:c.k==='amount'||c.k==='price'?<b style={{color:sageDk}}>{eur(row[c.k])}</b>
 :c.k==='status'?<Pill color={row[c.k]==='Payé'||row[c.k]==='Remboursé'?sage:gold}>{row[c.k]}</Pill>
 :row[c.k]}
 </td>
 ))}
-<td style={{padding:'9px 14px'}}>
-<Btn onClick={()=>onDel(row.id)} v='danger' sm>✕</Btn>
-</td>
+<td style={{padding:'9px 14px'}}><Btn onClick={()=>onDel(row.id)} v='danger' sm>✕</Btn></td>
 </tr>
 ))}
 </tbody>
 </table>
 </div>
-
-{/* Formulaire */}
 <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:14,
 padding:14,background:beige,borderRadius:12,alignItems:'flex-end'}}>
 {cols.map(c=>(
 <div key={c.k} style={{flex:c.fl||1,minWidth:100}}>
 <div style={{fontSize:11,color:txtM,marginBottom:4,fontWeight:600}}>{c.lb}</div>
-{c.k==='category'
-?<Sel value={cat} onChange={setCat} opts={c.opts||catOpts}/>
-:c.k==='status'
-?<Sel value={status} onChange={setStatus} opts={c.opts||[]}/>
-:<input
-ref={el=>{if(el)refs.current[c.k]=el}}
-type={c.type||'text'}
-defaultValue={c.k==='date'?today():''}
-placeholder={c.ph||''}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'}}
+{c.k==='category'?<Sel value={cat} onChange={setCat} opts={c.opts||catOpts}/>
+:c.k==='status'?<Sel value={status} onChange={setStatus} opts={statusOpts}/>
+:<input ref={el=>{if(el)refs.current[c.k]=el}}
+type={c.type||'text'} defaultValue={c.k==='date'?today():''} placeholder={c.ph||''}
+style={inpStyle}
 onFocus={e=>e.target.style.borderColor=sage}
-onBlur={e=>e.target.style.borderColor=beige2}/>
-}
+onBlur={e=>e.target.style.borderColor=beige2}/>}
 </div>
 ))}
 <Btn onClick={handleAdd}>+ {lbAdd}</Btn>
@@ -234,11 +241,12 @@ APP PRINCIPALE
 function App(){
 const [tab,setTab]=useState('dash');
 
-const [revs,setRevs]=useState([
+/* ── Toutes les données persistées dans localStorage ── */
+const [revs,setRevs]=useSaved('revs',[
 {id:uid(),date:'2025-01-05',desc:'Salaire janvier',category:'Salaire',amount:2400},
 {id:uid(),date:'2025-01-20',desc:'Freelance',category:'Vente',amount:350},
 ]);
-const [deps,setDeps]=useState([
+const [deps,setDeps]=useSaved('deps',[
 {id:uid(),date:'2025-01-01',desc:'Loyer',category:'Loyer',amount:750},
 {id:uid(),date:'2025-01-02',desc:'EDF',category:'Électricité',amount:62},
 {id:uid(),date:'2025-01-05',desc:'Courses Lidl',category:'Courses alimentaires',amount:85},
@@ -246,53 +254,53 @@ const [deps,setDeps]=useState([
 {id:uid(),date:'2025-01-12',desc:'Pharmacie',category:'Santé',amount:24},
 {id:uid(),date:'2025-01-18',desc:'Abonnements streaming',category:'Abonnements',amount:27},
 ]);
-const [eps,setEps]=useState([
+const [eps,setEps]=useSaved('eps',[
 {id:uid(),name:"Fonds d'urgence",target:5000,saved:1800},
 {id:uid(),name:'Projet Hijra',target:15000,saved:3200},
 {id:uid(),name:'Vacances',target:2000,saved:650},
 ]);
-const [dettesJe,setDettesJe]=useState([
+const [dettesJe,setDettesJe]=useSaved('dettesJe',[
 {id:uid(),person:'Marie',reason:'Soirée resto',amount:35,dueDate:'2025-02-01',status:'À payer'},
 ]);
-const [dettesEux,setDettesEux]=useState([
+const [dettesEux,setDettesEux]=useSaved('dettesEux',[
 {id:uid(),person:'Sophie',reason:'Billet concert',amount:60,dueDate:'2025-01-28',status:'En attente'},
 ]);
-const [vacs,setVacs]=useState([
+const [vacs,setVacs]=useSaved('vacs',[
 {id:uid(),dest:'Maroc',budget:1500,saved:650,date:'2025-08-15'},
 ]);
-const [abos,setAbos]=useState([
+const [abos,setAbos]=useSaved('abos',[
 {id:uid(),name:'Netflix',price:17.99,day:1},
 {id:uid(),name:'Spotify',price:9.99,day:5},
 {id:uid(),name:'Téléphone',price:19.99,day:10},
 {id:uid(),name:'Salle de sport',price:29.99,day:1},
 {id:uid(),name:'Internet',price:34.99,day:15},
 ]);
-const [objs,setObjs]=useState([
+const [objs,setObjs]=useSaved('objs',[
 {id:uid(),name:'Voiture',target:8000,reached:2100,deadline:'2026-06-01'},
 {id:uid(),name:'Formation',target:1200,reached:800,deadline:'2025-09-01'},
 ]);
 
-/* Formulaires simples */
+/* Formulaires (non persistés, temporaires) */
 const [fEp,setFEp]=useState({name:CAT_EP[0],target:'',saved:''});
 const [fVac,setFVac]=useState({dest:'',budget:'',saved:'',date:''});
 const [fAbo,setFAbo]=useState({name:'',price:'',day:''});
 const [fObj,setFObj]=useState({name:'',target:'',reached:'',deadline:''});
 
-/* ── Calculs ── */
+/* ── Calculs automatiques ── */
 const st=useMemo(()=>{
-const totR=revs.reduce((s,r)=>s+r.amount,0);
-const totD=deps.reduce((s,r)=>s+r.amount,0);
-const fix=deps.filter(d=>CAT_FIX.includes(d.category)).reduce((s,r)=>s+r.amount,0);
-const vari=deps.filter(d=>CAT_VAR.includes(d.category)).reduce((s,r)=>s+r.amount,0);
+const totR=revs.reduce((s,r)=>s+Number(r.amount),0);
+const totD=deps.reduce((s,r)=>s+Number(r.amount),0);
+const fix=deps.filter(d=>CAT_FIX.includes(d.category)).reduce((s,r)=>s+Number(r.amount),0);
+const vari=deps.filter(d=>CAT_VAR.includes(d.category)).reduce((s,r)=>s+Number(r.amount),0);
 const bal=totR-totD;
 const epRate=totR>0?Math.round(bal/totR*100):0;
-const totA=abos.reduce((s,a)=>s+a.price,0);
+const totA=abos.reduce((s,a)=>s+Number(a.price),0);
 return{totR,totD,fix,vari,bal,epRate,totA};
 },[revs,deps,abos]);
 
 const byCat=useMemo(()=>{
 const m={};
-deps.forEach(d=>{m[d.category]=(m[d.category]||0)+d.amount;});
+deps.forEach(d=>{m[d.category]=(m[d.category]||0)+Number(d.amount);});
 return Object.entries(m).map(([lb,v])=>({lb,v})).sort((a,b)=>b.v-a.v);
 },[deps]);
 
@@ -301,6 +309,14 @@ const monthly=useMemo(()=>[
 {lb:'Oct',rev:2350,dep:1710},{lb:'Nov',rev:2600,dep:1950},
 {lb:'Déc',rev:2800,dep:2200},{lb:'Jan',rev:st.totR,dep:st.totD},
 ],[st]);
+
+/* Bouton reset */
+const resetAll=()=>{
+if(!confirm('⚠️ Effacer TOUTES les données ? Cette action est irréversible.'))return;
+['revs','deps','eps','dettesJe','dettesEux','vacs','abos','objs']
+.forEach(k=>localStorage.removeItem('budget_'+k));
+location.reload();
+};
 
 /* ══════ SECTIONS ══════ */
 
@@ -385,15 +401,13 @@ const Revenus=()=>(
 <div style={{fontSize:28,fontWeight:800,color:sageDk,marginTop:4}}>{eur(st.totR)}</div>
 </div>
 <div className="card" style={{flex:1,minWidth:160}}>
-<div style={{fontSize:11,color:txtM,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>Entrées</div>
+<div style={{fontSize:11,color:txtM,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>Entrées enregistrées</div>
 <div style={{fontSize:28,fontWeight:800,color:txt,marginTop:4}}>{revs.length}</div>
 </div>
 </div>
 <div className="card">
-<Table rows={revs.map(r=>({...r,desc:r.desc}))}
-onAdd={r=>setRevs(p=>[...p,{...r,desc:r.desc,amount:Number(r.amount)}])}
-onDel={id=>setRevs(p=>p.filter(r=>r.id!==id))}
-lbAdd="Revenu" catOpts={CAT_REV}
+<Table rows={revs} onAdd={r=>setRevs(p=>[...p,{...r,amount:Number(r.amount)}])}
+onDel={id=>setRevs(p=>p.filter(r=>r.id!==id))} lbAdd="Revenu" catOpts={CAT_REV}
 cols={[
 {k:'date',lb:'Date',type:'date',req:true,fl:1},
 {k:'desc',lb:'Description',req:true,fl:2,ph:'Ex: Salaire mars'},
@@ -420,10 +434,8 @@ const Depenses=()=>(
 ))}
 </div>
 <div className="card">
-<Table rows={deps}
-onAdd={r=>setDeps(p=>[...p,{...r,amount:Number(r.amount)}])}
-onDel={id=>setDeps(p=>p.filter(r=>r.id!==id))}
-lbAdd="Dépense" catOpts={CAT_DEP}
+<Table rows={deps} onAdd={r=>setDeps(p=>[...p,{...r,amount:Number(r.amount)}])}
+onDel={id=>setDeps(p=>p.filter(r=>r.id!==id))} lbAdd="Dépense" catOpts={CAT_DEP}
 cols={[
 {k:'date',lb:'Date',type:'date',req:true,fl:1},
 {k:'desc',lb:'Description',req:true,fl:2,ph:'Ex: Loyer'},
@@ -438,8 +450,8 @@ const Epargne=()=>(
 <div>
 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16,marginBottom:20}}>
 {eps.map(s=>{
-const addRef=useRef(null);
-return (
+const ref=useRef(null);
+return(
 <div key={s.id} className="card" style={{borderTop:`3px solid ${sage}`}}>
 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
 <div>
@@ -454,9 +466,10 @@ return (
 <span style={{color:sage}}>Reste : <b>{eur(Math.max(0,s.target-s.saved))}</b></span>
 </div>
 <div style={{display:'flex',gap:8,marginTop:12}}>
-<input ref={addRef} type="number" placeholder="Ajouter € (Entrée)"
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:12,color:txt,outline:'none',flex:1}}
+<input ref={ref} type="number" placeholder="Ajouter € puis Entrée"
+style={{...inpStyle,flex:1,fontSize:12}}
+onFocus={e=>e.target.style.borderColor=sage}
+onBlur={e=>e.target.style.borderColor=beige2}
 onKeyDown={e=>{if(e.key==='Enter'){const v=Number(e.target.value);
 if(v>0)setEps(p=>p.map(x=>x.id===s.id?{...x,saved:x.saved+v}:x));
 e.target.value='';}}}/>
@@ -478,8 +491,7 @@ e.target.value='';}}}/>
 <div style={{fontSize:11,color:txtM,marginBottom:4,fontWeight:600}}>{f.lb}</div>
 <input type="number" value={fEp[f.k]} placeholder={f.ph}
 onChange={e=>setFEp(p=>({...p,[f.k]:e.target.value}))}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'}}
+style={inpStyle}
 onFocus={e=>e.target.style.borderColor=sage}
 onBlur={e=>e.target.style.borderColor=beige2}/>
 </div>
@@ -499,11 +511,13 @@ const Dettes=()=>(
 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
 <div className="card" style={{background:rose+'33',borderLeft:`4px solid ${err}`}}>
 <div style={{fontSize:11,color:err,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>Je dois</div>
-<div style={{fontSize:24,fontWeight:800,color:err,marginTop:4}}>{eur(dettesJe.filter(d=>d.status!=='Payé').reduce((s,r)=>s+r.amount,0))}</div>
+<div style={{fontSize:24,fontWeight:800,color:err,marginTop:4}}>
+{eur(dettesJe.filter(d=>d.status!=='Payé').reduce((s,r)=>s+Number(r.amount),0))}</div>
 </div>
 <div className="card" style={{background:sagePale,borderLeft:`4px solid ${sage}`}}>
 <div style={{fontSize:11,color:sageDk,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>On me doit</div>
-<div style={{fontSize:24,fontWeight:800,color:sageDk,marginTop:4}}>{eur(dettesEux.filter(d=>d.status!=='Remboursé').reduce((s,r)=>s+r.amount,0))}</div>
+<div style={{fontSize:24,fontWeight:800,color:sageDk,marginTop:4}}>
+{eur(dettesEux.filter(d=>d.status!=='Remboursé').reduce((s,r)=>s+Number(r.amount),0))}</div>
 </div>
 </div>
 <div className="card" style={{marginBottom:16}}>
@@ -562,14 +576,15 @@ const Vacances=()=>(
 <div className="card">
 <h3 style={{marginBottom:14}}>Ajouter une destination</h3>
 <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
-{[{k:'dest',lb:'Destination',ph:'Ex: Maroc'},{k:'budget',lb:'Budget (€)',ph:'0.00'},{k:'saved',lb:'Mis de côté (€)',ph:'0.00'},{k:'date',lb:'Date voyage',ph:''}].map(f=>(
+{[{k:'dest',lb:'Destination',ph:'Ex: Maroc',tp:'text'},
+{k:'budget',lb:'Budget (€)',ph:'0.00',tp:'number'},
+{k:'saved',lb:'Mis de côté (€)',ph:'0.00',tp:'number'},
+{k:'date',lb:'Date voyage',ph:'',tp:'date'}].map(f=>(
 <div key={f.k} style={{flex:1,minWidth:130}}>
 <div style={{fontSize:11,color:txtM,marginBottom:4,fontWeight:600}}>{f.lb}</div>
-<input type={f.k==='budget'||f.k==='saved'?'number':f.k==='date'?'date':'text'}
-value={fVac[f.k]} placeholder={f.ph}
+<input type={f.tp} value={fVac[f.k]} placeholder={f.ph}
 onChange={e=>setFVac(p=>({...p,[f.k]:e.target.value}))}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'}}
+style={inpStyle}
 onFocus={e=>e.target.style.borderColor=sage}
 onBlur={e=>e.target.style.borderColor=beige2}/>
 </div>
@@ -595,7 +610,8 @@ const Abonnements=()=>(
 <div style={{overflowX:'auto'}}>
 <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
 <thead><tr style={{background:beige}}>
-{['Abonnement','Prix mensuel','Prélèvement',''].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontWeight:600,color:txtM,fontSize:12}}>{h}</th>)}
+{['Abonnement','Prix mensuel','Prélèvement',''].map(h=>
+<th key={h} style={{padding:'10px 14px',textAlign:'left',fontWeight:600,color:txtM,fontSize:12}}>{h}</th>)}
 </tr></thead>
 <tbody>
 {abos.map((a,i)=>(
@@ -610,14 +626,14 @@ const Abonnements=()=>(
 </table>
 </div>
 <div style={{display:'flex',gap:10,marginTop:14,padding:14,background:beige,borderRadius:12,flexWrap:'wrap',alignItems:'flex-end'}}>
-{[{k:'name',lb:'Nom',ph:'Ex: Disney+'},{k:'price',lb:'Prix (€)',ph:'9.99'},{k:'day',lb:'Jour prélèvement',ph:'1-31'}].map(f=>(
+{[{k:'name',lb:'Nom',ph:'Ex: Disney+',tp:'text'},
+{k:'price',lb:'Prix (€)',ph:'9.99',tp:'number'},
+{k:'day',lb:'Jour prélèvement',ph:'1-31',tp:'number'}].map(f=>(
 <div key={f.k} style={{flex:1,minWidth:120}}>
 <div style={{fontSize:11,color:txtM,marginBottom:4,fontWeight:600}}>{f.lb}</div>
-<input type={f.k==='price'||f.k==='day'?'number':'text'}
-value={fAbo[f.k]} placeholder={f.ph}
+<input type={f.tp} value={fAbo[f.k]} placeholder={f.ph}
 onChange={e=>setFAbo(p=>({...p,[f.k]:e.target.value}))}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'}}
+style={inpStyle}
 onFocus={e=>e.target.style.borderColor=sage}
 onBlur={e=>e.target.style.borderColor=beige2}/>
 </div>
@@ -637,7 +653,7 @@ const Objectifs=()=>(
 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16,marginBottom:20}}>
 {objs.map((g,i)=>{
 const p=pct(g.reached,g.target),col=PIE[i%PIE.length];
-const addRef=useRef(null);
+const ref=useRef(null);
 return(
 <div key={g.id} className="card" style={{borderTop:`3px solid ${col}`}}>
 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
@@ -651,9 +667,10 @@ return(
 </div>
 {g.deadline&&<div style={{fontSize:11,color:txtM,marginTop:4}}>Échéance : {g.deadline}</div>}
 <div style={{display:'flex',gap:8,marginTop:12}}>
-<input ref={addRef} type="number" placeholder="Ajouter € (Entrée)"
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:12,color:txt,outline:'none',flex:1}}
+<input ref={ref} type="number" placeholder="Ajouter € puis Entrée"
+style={{...inpStyle,flex:1,fontSize:12}}
+onFocus={e=>e.target.style.borderColor=sage}
+onBlur={e=>e.target.style.borderColor=beige2}
 onKeyDown={e=>{if(e.key==='Enter'){const v=Number(e.target.value);
 if(v>0)setObjs(prev=>prev.map(x=>x.id===g.id?{...x,reached:Math.min(x.target,x.reached+v)}:x));
 e.target.value='';}}}/>
@@ -666,14 +683,15 @@ e.target.value='';}}}/>
 <div className="card">
 <h3 style={{marginBottom:14}}>Nouvel objectif financier</h3>
 <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
-{[{k:'name',lb:'Objectif',ph:'Ex: Voiture'},{k:'target',lb:'Montant cible (€)',ph:'0.00'},{k:'reached',lb:'Déjà atteint (€)',ph:'0.00'},{k:'deadline',lb:'Date limite',ph:''}].map(f=>(
+{[{k:'name',lb:'Objectif',ph:'Ex: Voiture',tp:'text'},
+{k:'target',lb:'Montant cible (€)',ph:'0.00',tp:'number'},
+{k:'reached',lb:'Déjà atteint (€)',ph:'0.00',tp:'number'},
+{k:'deadline',lb:'Date limite',ph:'',tp:'date'}].map(f=>(
 <div key={f.k} style={{flex:1,minWidth:130}}>
 <div style={{fontSize:11,color:txtM,marginBottom:4,fontWeight:600}}>{f.lb}</div>
-<input type={f.k==='target'||f.k==='reached'?'number':f.k==='deadline'?'date':'text'}
-value={fObj[f.k]} placeholder={f.ph}
+<input type={f.tp} value={fObj[f.k]} placeholder={f.ph}
 onChange={e=>setFObj(p=>({...p,[f.k]:e.target.value}))}
-style={{background:white,border:`1.5px solid ${beige2}`,borderRadius:10,
-padding:'7px 12px',fontSize:13,color:txt,outline:'none',width:'100%'}}
+style={inpStyle}
 onFocus={e=>e.target.style.borderColor=sage}
 onBlur={e=>e.target.style.borderColor=beige2}/>
 </div>
@@ -716,8 +734,7 @@ const Charts=()=>(
 <div className="card">
 <h3 style={{marginBottom:16}}>Revenus vs Dépenses</h3>
 <Bars data={[
-{lb:'Revenus',rev:st.totR},
-{lb:'Dépenses',dep:st.totD},
+{lb:'Revenus',rev:st.totR},{lb:'Dépenses',dep:st.totD},
 {lb:'Solde',rev:Math.max(0,st.bal),dep:Math.max(0,-st.bal)},
 ]} h={200}/>
 <div style={{marginTop:16,padding:12,background:sagePale,borderRadius:10}}>
@@ -744,19 +761,22 @@ const Charts=()=>(
 </div>
 );
 
-const SECTIONS={dash:<Dash/>,rev:<Revenus/>,dep:<Depenses/>,ep:<Epargne/>,dette:<Dettes/>,vac:<Vacances/>,abo:<Abonnements/>,obj:<Objectifs/>,chart:<Charts/>};
+const SECTIONS={dash:<Dash/>,rev:<Revenus/>,dep:<Depenses/>,ep:<Epargne/>,
+dette:<Dettes/>,vac:<Vacances/>,abo:<Abonnements/>,obj:<Objectifs/>,chart:<Charts/>};
 
 return(
 <div style={{minHeight:'100vh',background:cream}}>
 
-{/* Header */}
+{/* ── Header ── */}
 <div style={{background:`linear-gradient(135deg,${sageDk},${sage})`,padding:'20px 28px',
 display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
 <div>
-<div style={{color:goldLt,fontSize:12,fontWeight:600,letterSpacing:3,textTransform:'uppercase',marginBottom:4}}>Tableau de bord financier</div>
+<div style={{color:goldLt,fontSize:12,fontWeight:600,letterSpacing:3,textTransform:'uppercase',marginBottom:4}}>
+Tableau de bord financier
+</div>
 <div style={{color:'#fff',fontSize:24,fontWeight:800,letterSpacing:.5}}>✦ Mon Budget Personnel</div>
 </div>
-<div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+<div style={{display:'flex',gap:20,flexWrap:'wrap',alignItems:'center'}}>
 {[
 {lb:'Revenus',val:eur(st.totR),col:sageLt},
 {lb:'Dépenses',val:eur(st.totD),col:goldLt},
@@ -767,10 +787,15 @@ display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap
 <div style={{fontSize:18,fontWeight:800,color:s.col}}>{s.val}</div>
 </div>
 ))}
+<button onClick={resetAll} title="Effacer toutes les données"
+style={{background:'rgba(255,255,255,.15)',border:'1px solid rgba(255,255,255,.3)',
+color:'#fff',borderRadius:10,padding:'6px 14px',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+🗑 Reset
+</button>
 </div>
 </div>
 
-{/* Nav */}
+{/* ── Nav ── */}
 <div style={{background:white,borderBottom:`2px solid ${beige}`,padding:'0 20px',display:'flex',gap:2,overflowX:'auto'}}>
 {TABS.map(t=>(
 <button key={t.id} onClick={()=>setTab(t.id)} style={{
@@ -785,12 +810,13 @@ marginBottom:-2,whiteSpace:'nowrap',transition:'all .2s',fontFamily:'inherit',
 ))}
 </div>
 
-{/* Contenu */}
+{/* ── Contenu ── */}
 <div style={{maxWidth:1200,margin:'0 auto',padding:'24px 20px'}}>
-<div style={{marginBottom:20}}>
+<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
 <h2 style={{fontSize:20,fontWeight:800,color:txt,letterSpacing:.3}}>
 {TABS.find(t=>t.id===tab)?.ic} {TABS.find(t=>t.id===tab)?.lb}
 </h2>
+<span style={{fontSize:11,color:txtL,fontStyle:'italic'}}>💾 Sauvegarde automatique activée</span>
 </div>
 {SECTIONS[tab]}
 </div>
@@ -802,3 +828,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
+HTMLEOF
+echo "OK — $(wc -l < /mnt/user-data/outputs/index.html) lignes"
+{
+"returncode" : 0,
+"stdout" : "OK — 829 lignes\n",
+"stderr" : ""
+}
